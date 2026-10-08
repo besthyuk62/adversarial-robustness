@@ -105,3 +105,9 @@ with torch.no_grad():
 for i in range(10):
     accuracy = class_correct[i] / class_total[i]
     print(classes[i], ":", accuracy)
+
+torch.save(
+    model.state_dict(),
+    "checkpoints/cnn_cifar10.pth"
+)
+print("Model saved")
