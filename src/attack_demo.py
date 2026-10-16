@@ -118,8 +118,7 @@ for trial in range(30):
     
     random_perturbation = epsilon_norm * random_sign
 
-    random_images = images + random_perturbation
-    random_images = random_images.clamp(-1, 1).detach()
+    random_images = (images.detach() + random_perturbation).clamp(-1, 1)
 
     with torch.no_grad():
         random_outputs = model(random_images)
@@ -128,7 +127,7 @@ for trial in range(30):
 
         random_accuracy = (random_preds == labels).float().mean()
 
-    random_accuracies.append(random_accuracy)
+    random_accuracies.append(random_accuracy.item())
 
 results = torch.tensor(random_accuracies)
 
