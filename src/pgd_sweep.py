@@ -42,11 +42,18 @@ criterion = nn.CrossEntropyLoss()
 
 def pgd_attack(
     images, labels, epsilon_norm, alpha_norm, 
-    steps, record_steps=None
+    steps, record_steps=None, random_start=False
     ):
 
     original_images = images.detach()
-    adv_images = original_images.clone()
+    if random_start:
+        random_noise = torch.rand_like(original_images) * 2 - 1
+        random_noise = random_noise * epsilon_norm
+        adv_images = original_images + random_noise
+        adv_images = adv_images.clamp(-1, 1)
+    else:    
+        adv_images = original_images.clone()
+
     saved = {}
     
     for step in range(1, steps + 1):
@@ -72,30 +79,101 @@ def pgd_attack(
     return adv_images.detach()
 
 
-epsilon_norm = (2 / 255) / 0.5
-alpha_norm = (0.5 / 255) / 0.5
+epsilon_norm = (4 / 255) / 0.5
+alpha_norm = (1 / 255) / 0.5
 
-correct_at_4 = 0
-correct_at_20 = 0
+clean_correct = 0
+standard_correct = 0
+standard_survived_num = 0
+survived_num = 0
 total_images = 0
 
+new_successes = [0] * 10
 
-for images, labels in test_loader:
+for batch_idx, (images, labels) in enumerate(test_loader):
 
-    adv_images = pgd_attack(
-        images, labels, epsilon_norm, alpha_norm, steps=20, record_steps = [4, 20]
+    if batch_idx >= 8:
+        break
+
+    standard_adv = pgd_attack(
+        images, labels, epsilon_norm, alpha_norm,
+        steps=10, random_start=False
     )
 
     with torch.no_grad():
-        outputs4 = model(adv_images[4])
-        preds4 = outputs4.argmax(dim=1)
-        correct_at_4 += (preds4 == labels).sum().item()
-        
-        outputs20 = model(adv_images[20])
-        preds20 = outputs20.argmax(dim=1)
-        correct_at_20 += (preds20 == labels).sum().item()
+        clean_preds = model(images).argmax(dim=1)
+        standard_preds = model(standard_adv).argmax(dim=1)
 
+        clean_correct += (clean_preds == labels).sum().item()
+        standard_correct += (standard_preds == labels).sum().item()
+
+        survived = (clean_preds == labels) & (standard_preds == labels)
+
+        standard_survived_num += survived.sum().item()
+
+    for restart in range(10):
+
+        random_adv = pgd_attack(
+            images, labels, epsilon_norm, alpha_norm,
+            steps=10, random_start=True
+        )
+
+        with torch.no_grad():
+            random_preds = model(random_adv).argmax(dim=1)
+
+            newly_broken = (
+                survived & (random_preds != labels)
+            ).sum().item()
+
+            new_successes[restart] += newly_broken
+
+            survived = survived & (random_preds == labels)
+    survived_num += survived.sum().item()
     total_images += labels.size(0)
 
-print("Step 4 Accuracy:", correct_at_4 / total_images)
-print("Step 20 Accuracy:", correct_at_20 / total_images)
+
+print("Total images:", total_images)
+
+print("Clean Accuracy:", clean_correct / total_images)
+print("Standard PGD Accuracy:", standard_correct / total_images)
+
+print(
+    "Standard Robust Accuracy:",
+    standard_survived_num / total_images
+)
+
+print(
+    "Multi-Restart Robust Accuracy:",
+    survived_num / total_images
+)
+
+print(
+    "Multi-Restart ASR:",
+    1 - survived_num / clean_correct
+)
+
+for restart in range(10):
+    print(
+        f"Restart {restart + 1}: "
+        f"New successes = {new_successes[restart]}"
+    )
+
+# for images, labels in test_loader:
+
+#     adv_images = pgd_attack(
+#         images, labels, epsilon_norm, alpha_norm, steps=20, record_steps = [4, 20]
+#     )
+
+#     with torch.no_grad():
+#         outputs4 = model(adv_images[4])
+#         preds4 = outputs4.argmax(dim=1)
+#         correct_at_4 += (preds4 == labels).sum().item()
+        
+#         outputs20 = model(adv_images[20])
+#         preds20 = outputs20.argmax(dim=1)
+#         correct_at_20 += (preds20 == labels).sum().item()
+
+#     total_images += labels.size(0)
+
+# print("Step 4 Accuracy:", correct_at_4 / total_images)
+# print("Step 20 Accuracy:", correct_at_20 / total_images)
