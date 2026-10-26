@@ -79,8 +79,8 @@ def pgd_attack(
     return adv_images.detach()
 
 
-epsilon_norm = (4 / 255) / 0.5
-alpha_norm = (1 / 255) / 0.5
+epsilon_norm = (2 / 255) / 0.5
+alpha_norm = (0.5 / 255) / 0.5
 
 clean_correct = 0
 standard_correct = 0

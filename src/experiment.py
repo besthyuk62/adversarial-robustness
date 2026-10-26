@@ -3,8 +3,7 @@ import torch.nn as nn
 from model import build_model
 from torchvision import datasets, transforms
 from torch.utils.data import DataLoader
-import statistics
-import time
+import matplotlib.pyplot as plt
 
 model = build_model()
 
@@ -41,6 +40,7 @@ test_loader = DataLoader(
 )
 
 criterion = nn.CrossEntropyLoss()
+criterion_sum = nn.CrossEntropyLoss(reduction="sum")
 
 def pgd_attack(
     images, labels, epsilon_norm, alpha_norm, 
@@ -80,27 +80,35 @@ def pgd_attack(
 
     return adv_images.detach()
 
-def evaluate_pgd(steps, restarts, max_batches):
 
-    model.eval()
+def evaluate_epsilon(epsilon_pixel, max_batches):
+
+    epsilon_norm = (epsilon_pixel / 255) / 0.5
 
     clean_correct = 0
-    standard_correct = 0
-    standard_survived_num = 0
-    survived_num = 0
-    total_images = 0
+    fgsm_correct = 0
+    pgd_correct = 0
 
-    new_successes = [0] * restarts
+    total_images = 0
 
     for batch_idx, (images, labels) in enumerate(test_loader):
 
         if batch_idx >= max_batches:
             break
 
-        standard_adv = pgd_attack(
+        fgsm_adv = pgd_attack(
             images, labels,
-            epsilon_norm, alpha_norm,
-            steps=steps,
+            epsilon_norm,
+            epsilon_norm,
+            steps=1,
+            random_start=False
+        )
+
+        pgd_adv = pgd_attack(
+            images, labels,
+            epsilon_norm,
+            epsilon_norm / 4,
+            steps=10,
             random_start=False
         )
 
@@ -108,78 +116,142 @@ def evaluate_pgd(steps, restarts, max_batches):
             clean_preds = model(images).argmax(dim=1)
             clean_correct += (clean_preds == labels).sum().item()
 
-            standard_preds = model(standard_adv).argmax(dim=1)
-            standard_correct += (standard_preds == labels).sum().item()
-
-            survived = (clean_preds == labels) & (standard_preds == labels)
-
-            standard_survived_num += survived.sum().item()
-        
-        for restart in range(restarts):
-
-            random_adv = pgd_attack(
-                images, labels,
-                epsilon_norm, alpha_norm,
-                steps=steps,
-                random_start=True
-            )
-
-            with torch.no_grad():
-                random_preds = model(random_adv).argmax(dim=1)
-
-                newly_broken = (
-                    survived & (random_preds != labels)
+            fgsm_preds = model(fgsm_adv).argmax(dim=1)
+            fgsm_correct += (
+                (clean_preds == labels)&(fgsm_preds == labels)
                 ).sum().item()
 
-                new_successes[restart] += newly_broken
+            pgd_preds = model(pgd_adv).argmax(dim=1)
+            pgd_correct += (
+                (clean_preds == labels)&(pgd_preds == labels)
+                ).sum().item()
 
-                survived = survived & (random_preds == labels)
-        
-        survived_num += survived.sum().item()
         total_images += labels.size(0)
 
     return {
+        "epsilon": epsilon_pixel,
         "clean_acc": clean_correct / total_images,
-        "standard_acc": standard_correct / total_images,
-        "standard_robust_acc": standard_survived_num / total_images,
-        "multi_robust_acc": survived_num / total_images,
-        "new_successes": new_successes
+        "fgsm_acc": fgsm_correct / total_images,
+        "pgd_acc": pgd_correct / total_images,
 }
 
-epsilon_norm = (2 / 255) / 0.5
-alpha_norm = (0.5 / 255) / 0.5
+def compare_attack_loss(epsilon_pixel, max_batches):
+    epsilon_norm = (epsilon_pixel / 255) / 0.5
 
-seeds = [42, 123, 2026]
+    clean_loss = 0
+    fgsm_loss = 0
+    pgd_loss = 0
 
-accuracies = []
-times = []
+    total_images = 0
 
-for seed in seeds:
+    for batch_idx, (images, labels) in enumerate(test_loader):
 
-    torch.manual_seed(seed)
+        if batch_idx >= max_batches:
+            break
 
-    start = time.perf_counter()
+        fgsm_adv = pgd_attack(
+            images, labels,
+            epsilon_norm,
+            epsilon_norm,
+            steps=1,
+            random_start=False
+        )
 
-    result = evaluate_pgd(
-        steps=10,
-        restarts=3,
+        pgd_adv = pgd_attack(
+            images, labels,
+            epsilon_norm,
+            epsilon_norm / 4,
+            steps=10,
+            random_start=False
+        )
+
+        with torch.no_grad():
+            clean_loss += criterion_sum(
+                model(images), labels
+            ).item()
+
+            fgsm_loss += criterion_sum(
+                model(fgsm_adv), labels
+            ).item()
+
+            pgd_loss += criterion_sum(
+                model(pgd_adv), labels
+            ).item()
+
+        total_images += labels.size(0)
+
+    return {
+        "mean_clean_loss": clean_loss / total_images,
+        "mean_fgsm_loss": fgsm_loss / total_images,
+        "mean_pgd_loss": pgd_loss / total_images,
+}
+epsilons = [0, 1, 2, 4, 8]
+
+results = []
+
+for eps in epsilons:
+
+    result1 = evaluate_epsilon(
+        epsilon_pixel=eps,
         max_batches=8
     )
 
-    elapsed = time.perf_counter() - start
-
-    accuracies.append(result["multi_robust_acc"])
-    times.append(elapsed)
-
+    result2 = compare_attack_loss(
+        epsilon_pixel=eps,
+        max_batches=8
+    )
+  
+    combined_result = {**result1, **result2}
+    results.append(combined_result)
+    
     print(
-        f"Seed {seed}: "
-        f"Accuracy = {result['multi_robust_acc']:.4f}, "
-        f"Time = {elapsed:.3f}s, "
-        f"New Successes = {sum(result['new_successes'])}"
+        f"Epsilon = {eps}/255, "
+        f"Clean = {result1['clean_acc']:.4f}, "
+        f"FGSM = {result1['fgsm_acc']:.4f}, "
+        f"PGD = {result1['pgd_acc']:.4f}, "
+        f"Clean_loss = {result2['mean_clean_loss']:.4f}, "
+        f"FGSM_loss = {result2['mean_fgsm_loss']:.4f}, "
+        f"PGD_loss = {result2['mean_pgd_loss']:.4f}"
     )
 
-print("Mean Accuracy:", statistics.mean(accuracies))
-print("Std Accuracy:", statistics.stdev(accuracies))
 
-print("Mean Time:", statistics.mean(times))
-print("Std Time:", statistics.stdev(times))
+eps_values = [r["epsilon"] for r in results]
+
+fgsm_accs = [r["fgsm_acc"] * 100 for r in results]
+
+pgd_accs = [r["pgd_acc"] * 100 for r in results]
+
+plt.figure(figsize=(8, 5))
+
+plt.plot(
+    eps_values,
+    fgsm_accs,
+    marker="o",
+    label="FGSM"
+)
+
+plt.plot(
+    eps_values,
+    pgd_accs,
+    marker="s",
+    label="PGD"
+)
+
+plt.xlabel("Epsilon (1/255)")
+plt.ylabel("Robust Accuracy (%)")
+
+plt.title("Adversarial Robustness: FGSM vs PGD")
+
+plt.xticks(eps_values)
+plt.ylim(0, 70)
+
+plt.grid(True, alpha=0.3)
+plt.legend()
+
+plt.tight_layout()
+plt.savefig(
+    "robustness_curve.png",
+    dpi=300,
+    bbox_inches="tight"
+)
+plt.show()
