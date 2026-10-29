@@ -18,6 +18,19 @@ model.load_state_dict(state)
 model.eval()
 model.requires_grad_(False)
 
+model_B = build_model()
+
+state_B = torch.load(
+    "checkpoints/cnn_cifar10_seed123.pth",
+    map_location="cpu",
+    weights_only=True
+)
+
+model_B.load_state_dict(state_B)
+
+model_B.eval()
+model_B.requires_grad_(False)
+
 transform = transforms.Compose([
     transforms.ToTensor(),
     transforms.Normalize(
@@ -43,7 +56,7 @@ criterion = nn.CrossEntropyLoss()
 criterion_sum = nn.CrossEntropyLoss(reduction="sum")
 
 def pgd_attack(
-    images, labels, epsilon_norm, alpha_norm, 
+    attack_model, images, labels, epsilon_norm, alpha_norm, 
     steps, record_steps=None, random_start=False
     ):
 
@@ -60,7 +73,7 @@ def pgd_attack(
     
     for step in range(1, steps + 1):
         adv_images = adv_images.detach().requires_grad_(True)
-        outputs = model(adv_images)
+        outputs = attack_model(adv_images)
         loss = criterion(outputs, labels)
         loss.backward()
 
@@ -97,6 +110,7 @@ def evaluate_epsilon(epsilon_pixel, max_batches):
             break
 
         fgsm_adv = pgd_attack(
+            model, 
             images, labels,
             epsilon_norm,
             epsilon_norm,
@@ -105,6 +119,7 @@ def evaluate_epsilon(epsilon_pixel, max_batches):
         )
 
         pgd_adv = pgd_attack(
+            model, 
             images, labels,
             epsilon_norm,
             epsilon_norm / 4,
@@ -150,6 +165,7 @@ def compare_attack_loss(epsilon_pixel, max_batches):
             break
 
         fgsm_adv = pgd_attack(
+            model,
             images, labels,
             epsilon_norm,
             epsilon_norm,
@@ -158,6 +174,7 @@ def compare_attack_loss(epsilon_pixel, max_batches):
         )
 
         pgd_adv = pgd_attack(
+            model,
             images, labels,
             epsilon_norm,
             epsilon_norm / 4,
@@ -185,73 +202,92 @@ def compare_attack_loss(epsilon_pixel, max_batches):
         "mean_fgsm_loss": fgsm_loss / total_images,
         "mean_pgd_loss": pgd_loss / total_images,
 }
-epsilons = [0, 1, 2, 4, 8]
 
-results = []
+# epsilons = [0, 1, 2, 4, 8]
 
-for eps in epsilons:
+# results = []
 
-    result1 = evaluate_epsilon(
-        epsilon_pixel=eps,
-        max_batches=8
-    )
+# for eps in epsilons:
 
-    result2 = compare_attack_loss(
-        epsilon_pixel=eps,
-        max_batches=8
-    )
+#     result1 = evaluate_epsilon(
+#         epsilon_pixel=eps,
+#         max_batches=8
+#     )
+
+#     result2 = compare_attack_loss(
+#         epsilon_pixel=eps,
+#         max_batches=8
+#     )
   
-    combined_result = {**result1, **result2}
-    results.append(combined_result)
+#     combined_result = {**result1, **result2}
+#     results.append(combined_result)
     
-    print(
-        f"Epsilon = {eps}/255, "
-        f"Clean = {result1['clean_acc']:.4f}, "
-        f"FGSM = {result1['fgsm_acc']:.4f}, "
-        f"PGD = {result1['pgd_acc']:.4f}, "
-        f"Clean_loss = {result2['mean_clean_loss']:.4f}, "
-        f"FGSM_loss = {result2['mean_fgsm_loss']:.4f}, "
-        f"PGD_loss = {result2['mean_pgd_loss']:.4f}"
-    )
+#     print(
+#         f"Epsilon = {eps}/255, "
+#         f"Clean = {result1['clean_acc']:.4f}, "
+#         f"FGSM = {result1['fgsm_acc']:.4f}, "
+#         f"PGD = {result1['pgd_acc']:.4f}, "
+#         f"Clean_loss = {result2['mean_clean_loss']:.4f}, "
+#         f"FGSM_loss = {result2['mean_fgsm_loss']:.4f}, "
+#         f"PGD_loss = {result2['mean_pgd_loss']:.4f}"
+#     )
 
 
-eps_values = [r["epsilon"] for r in results]
+# eps_values = [r["epsilon"] for r in results]
 
-fgsm_accs = [r["fgsm_acc"] * 100 for r in results]
+# fgsm_accs = [r["fgsm_acc"] * 100 for r in results]
 
-pgd_accs = [r["pgd_acc"] * 100 for r in results]
+# pgd_accs = [r["pgd_acc"] * 100 for r in results]
 
-plt.figure(figsize=(8, 5))
+# plt.figure(figsize=(8, 5))
 
-plt.plot(
-    eps_values,
-    fgsm_accs,
-    marker="o",
-    label="FGSM"
+# plt.plot(
+#     eps_values,
+#     fgsm_accs,
+#     marker="o",
+#     label="FGSM"
+# )
+
+# plt.plot(
+#     eps_values,
+#     pgd_accs,
+#     marker="s",
+#     label="PGD"
+# )
+
+# plt.xlabel("Epsilon (1/255)")
+# plt.ylabel("Robust Accuracy (%)")
+
+# plt.title("Adversarial Robustness: FGSM vs PGD")
+
+# plt.xticks(eps_values)
+# plt.ylim(0, 70)
+
+# plt.grid(True, alpha=0.3)
+# plt.legend()
+
+# plt.tight_layout()
+# plt.savefig(
+#     "robustness_curve.png",
+#     dpi=300,
+#     bbox_inches="tight"
+# )
+# plt.show()
+
+images, labels = next(iter(test_loader))
+
+with torch.no_grad():
+    preds_A = model(images).argmax(dim=1)
+    preds_B = model_B(images).argmax(dim=1)
+
+print("First 10 labels:", labels[:10].tolist())
+
+print(
+    "Model A correct:",
+    (preds_A == labels).sum().item()
 )
 
-plt.plot(
-    eps_values,
-    pgd_accs,
-    marker="s",
-    label="PGD"
+print(
+    "Model B correct:",
+    (preds_B == labels).sum().item()
 )
-
-plt.xlabel("Epsilon (1/255)")
-plt.ylabel("Robust Accuracy (%)")
-
-plt.title("Adversarial Robustness: FGSM vs PGD")
-
-plt.xticks(eps_values)
-plt.ylim(0, 70)
-
-plt.grid(True, alpha=0.3)
-plt.legend()
-
-plt.tight_layout()
-plt.savefig(
-    "robustness_curve.png",
-    dpi=300,
-    bbox_inches="tight"
-)
-plt.show()
